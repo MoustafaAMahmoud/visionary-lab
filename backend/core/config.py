@@ -13,14 +13,14 @@ class Settings(BaseSettings):
 
     # Azure OpenAI for Sora Video Generation
     SORA_AOAI_RESOURCE: str  # The Azure OpenAI resource name for Sora
-    SORA_DEPLOYMENT: str     # The Sora deployment name
-    SORA_AOAI_API_KEY: str   # The Azure OpenAI API key for Sora
+    SORA_DEPLOYMENT: str  # The Sora deployment name
+    SORA_AOAI_API_KEY: str  # The Azure OpenAI API key for Sora
 
     # Azure OpenAI for LLM
     # The Azure OpenAI resource name for LLM
     LLM_AOAI_RESOURCE: Optional[str] = None
-    LLM_DEPLOYMENT: Optional[str] = None     # The LLM deployment name
-    LLM_AOAI_API_KEY: Optional[str] = None   # The Azure OpenAI API key for LLM
+    LLM_DEPLOYMENT: Optional[str] = None  # The LLM deployment name
+    LLM_AOAI_API_KEY: Optional[str] = None  # The Azure OpenAI API key for LLM
 
     # Azure OpenAI for Image Generation
     # The Azure OpenAI resource name for image generation
@@ -32,10 +32,10 @@ class Settings(BaseSettings):
 
     # OpenAI API for Image Generation with GPT-Image-1
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_ORG_ID: Optional[str] = None      # Organization ID for OpenAI
+    OPENAI_ORG_ID: Optional[str] = None  # Organization ID for OpenAI
     # Whether organization is verified on OpenAI
     OPENAI_ORG_VERIFIED: bool = False
-    GPT_IMAGE_MAX_TOKENS: int = 150000       # Maximum token usage limit
+    GPT_IMAGE_MAX_TOKENS: int = 150000  # Maximum token usage limit
 
     # Azure Blob Storage Settings
     # Option 1: Connection string (deprecated)
@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     # Container names
     AZURE_BLOB_IMAGE_CONTAINER: str = "images"  # Container name for images
     AZURE_BLOB_VIDEO_CONTAINER: str = "videos"  # Container name for videos
+
+    # Azure Cosmos DB Settings
+    AZURE_COSMOS_DB_ENDPOINT: Optional[str] = None  # Cosmos DB endpoint URL
+    AZURE_COSMOS_DB_KEY: Optional[str] = None  # Cosmos DB primary key
+    AZURE_COSMOS_DB_ID: str = "visionarylab"  # Database name
+    AZURE_COSMOS_CONTAINER_ID: str = "metadata"  # Container name for metadata
+
+    # Alternative: Managed Identity settings (for Azure-hosted deployments)
+    USE_MANAGED_IDENTITY: bool = (
+        False  # Set to True when running on Azure with Managed Identity
+    )
 
     # Azure OpenAI API Version
     # API version for Azure OpenAI services

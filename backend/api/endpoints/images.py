@@ -32,20 +32,41 @@ from backend.models.images import (
     ImageSaveRequest,
     ImageSaveResponse,
     TokenUsage,
-    InputTokensDetails
+    InputTokensDetails,
 )
 from backend.models.gallery import MediaType
 from backend.core import llm_client, dalle_client, image_sas_token
 from backend.core.azure_storage import AzureBlobStorageService
 from backend.core.analyze import ImageAnalyzer
 from backend.core.config import settings
-from backend.core.instructions import analyze_image_system_message, img_prompt_enhance_msg, brand_protect_neutralize_msg, brand_protect_replace_msg, filename_system_message
+from backend.core.instructions import (
+    analyze_image_system_message,
+    img_prompt_enhance_msg,
+    brand_protect_neutralize_msg,
+    brand_protect_replace_msg,
+    filename_system_message,
+)
+from backend.core.cosmos_client import CosmosDBService
 
 router = APIRouter()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def get_cosmos_service() -> Optional[CosmosDBService]:
+    """Dependency to get Cosmos DB service instance (optional)"""
+    try:
+        if settings.AZURE_COSMOS_DB_ENDPOINT and settings.AZURE_COSMOS_DB_KEY:
+            return CosmosDBService()
+        return None
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Cosmos DB service unavailable: {e}")
+        return None
 
 
 def normalize_filename(filename: str) -> str:
@@ -70,13 +91,13 @@ def normalize_filename(filename: str) -> str:
 
     # Remove or replace invalid characters for most filesystems
     # Keep alphanumeric, hyphens, underscores, and dots
-    stem = re.sub(r'[^a-zA-Z0-9_\-.]', '_', stem)
+    stem = re.sub(r"[^a-zA-Z0-9_\-.]", "_", stem)
 
     # Remove multiple consecutive underscores
-    stem = re.sub(r'_+', '_', stem)
+    stem = re.sub(r"_+", "_", stem)
 
     # Remove leading/trailing underscores and dots
-    stem = stem.strip('_.')
+    stem = stem.strip("_.")
 
     # Ensure the filename isn't empty
     if not stem:
@@ -109,8 +130,7 @@ async def generate_filename_for_prompt(prompt: str, extension: str = None) -> st
     try:
         # Create request for filename generation
         filename_request = ImageFilenameGenerateRequest(
-            prompt=prompt,
-            extension=extension
+            prompt=prompt, extension=extension
         )
 
         # Call the filename generation function directly
@@ -145,7 +165,10 @@ async def generate_image(request: ImageGenerationRequest):
             params["background"] = request.background
             if request.output_format != "png":
                 params["output_format"] = request.output_format
-            if request.output_format in ["webp", "jpeg"] and request.output_compression != 100:
+            if (
+                request.output_format in ["webp", "jpeg"]
+                and request.output_compression != 100
+            ):
                 params["output_compression"] = request.output_compression
             if request.moderation != "auto":
                 params["moderation"] = request.moderation
@@ -162,23 +185,25 @@ async def generate_image(request: ImageGenerationRequest):
             if "input_tokens_details" in response["usage"]:
                 input_tokens_details = InputTokensDetails(
                     text_tokens=response["usage"]["input_tokens_details"].get(
-                        "text_tokens", 0),
+                        "text_tokens", 0
+                    ),
                     image_tokens=response["usage"]["input_tokens_details"].get(
-                        "image_tokens", 0)
+                        "image_tokens", 0
+                    ),
                 )
 
             token_usage = TokenUsage(
                 total_tokens=response["usage"].get("total_tokens", 0),
                 input_tokens=response["usage"].get("input_tokens", 0),
                 output_tokens=response["usage"].get("output_tokens", 0),
-                input_tokens_details=input_tokens_details
+                input_tokens_details=input_tokens_details,
             )
 
         return ImageGenerationResponse(
             success=True,
             message="Refer to the imgen_model_response for details",
             imgen_model_response=response,
-            token_usage=token_usage
+            token_usage=token_usage,
         )
     except Exception as e:
         logger.error(f"Error in /generate endpoint: {str(e)}", exc_info=True)
@@ -211,7 +236,10 @@ async def edit_image(request: ImageEditRequest):
                 params["quality"] = request.quality
             if request.output_format != "png":
                 params["output_format"] = request.output_format
-            if request.output_format in ["webp", "jpeg"] and request.output_compression != 100:
+            if (
+                request.output_format in ["webp", "jpeg"]
+                and request.output_compression != 100
+            ):
                 params["output_compression"] = request.output_compression
             if request.user:
                 params["user"] = request.user
@@ -221,7 +249,8 @@ async def edit_image(request: ImageEditRequest):
                 image_count = len(request.image)
                 if image_count > 1 and not settings.OPENAI_ORG_VERIFIED:
                     logger.warning(
-                        "Using multiple reference images requires organization verification")
+                        "Using multiple reference images requires organization verification"
+                    )
 
         # Perform image editing
         response = dalle_client.edit_image(**params)
@@ -233,27 +262,30 @@ async def edit_image(request: ImageEditRequest):
             if "input_tokens_details" in response["usage"]:
                 input_tokens_details = InputTokensDetails(
                     text_tokens=response["usage"]["input_tokens_details"].get(
-                        "text_tokens", 0),
+                        "text_tokens", 0
+                    ),
                     image_tokens=response["usage"]["input_tokens_details"].get(
-                        "image_tokens", 0)
+                        "image_tokens", 0
+                    ),
                 )
 
             token_usage = TokenUsage(
                 total_tokens=response["usage"].get("total_tokens", 0),
                 input_tokens=response["usage"].get("input_tokens", 0),
                 output_tokens=response["usage"].get("output_tokens", 0),
-                input_tokens_details=input_tokens_details
+                input_tokens_details=input_tokens_details,
             )
 
             # Log token usage for cost tracking
             logger.info(
-                f"Token usage - Total: {token_usage.total_tokens}, Input: {token_usage.input_tokens}, Output: {token_usage.output_tokens}")
+                f"Token usage - Total: {token_usage.total_tokens}, Input: {token_usage.input_tokens}, Output: {token_usage.output_tokens}"
+            )
 
         return ImageGenerationResponse(
             success=True,
             message="Refer to the imgen_model_response for details",
             imgen_model_response=response,
-            token_usage=token_usage
+            token_usage=token_usage,
         )
     except Exception as e:
         logger.error(f"Error in /edit endpoint: {str(e)}", exc_info=True)
@@ -269,7 +301,7 @@ async def edit_image_upload(
     quality: str = Form("auto"),
     output_format: str = Form("png"),
     image: List[UploadFile] = File(...),
-    mask: Optional[UploadFile] = File(None)
+    mask: Optional[UploadFile] = File(None),
 ):
     """Edit input images uploaded via multipart form data"""
     try:
@@ -287,7 +319,7 @@ async def edit_image_upload(
                 if file_size_mb > max_file_size_mb:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Image {idx+1} exceeds maximum size of {max_file_size_mb}MB"
+                        detail=f"Image {idx + 1} exceeds maximum size of {max_file_size_mb}MB",
                     )
 
                 # Create a temporary file with the right extension based on content type
@@ -310,14 +342,13 @@ async def edit_image_upload(
                 temp_files.append((temp_fd, temp_path))
 
                 # Write the contents and close the file descriptor
-                with os.fdopen(temp_fd, 'wb') as f:
+                with os.fdopen(temp_fd, "wb") as f:
                     f.write(contents)
 
                 # Store the file path for the API call
                 image_file_objs.append(temp_path)
 
-                logger.info(
-                    f"Saved image {idx+1} to {temp_path} with format {ext}")
+                logger.info(f"Saved image {idx + 1} to {temp_path} with format {ext}")
 
             # Process mask if provided
             mask_file_obj = None
@@ -331,7 +362,9 @@ async def edit_image_upload(
                     # Try to determine the format from the file data
                     try:
                         with Image.open(io.BytesIO(mask_contents)) as pil_img:
-                            mask_ext = pil_img.format.lower() if pil_img.format else "png"
+                            mask_ext = (
+                                pil_img.format.lower() if pil_img.format else "png"
+                            )
                     except Exception:
                         mask_ext = "png"  # Default to PNG
 
@@ -344,16 +377,16 @@ async def edit_image_upload(
                 temp_files.append((mask_fd, mask_path))
 
                 # Write the mask contents
-                with os.fdopen(mask_fd, 'wb') as f:
+                with os.fdopen(mask_fd, "wb") as f:
                     f.write(mask_contents)
 
                 mask_file_obj = mask_path
-                logger.info(
-                    f"Saved mask to {mask_path} with format {mask_ext}")
+                logger.info(f"Saved mask to {mask_path} with format {mask_ext}")
 
             # Prepare parameters for the OpenAI API call
             logger.info(
-                f"Editing {len(image_file_objs)} image(s) using {model}, quality: {quality}, size: {size}")
+                f"Editing {len(image_file_objs)} image(s) using {model}, quality: {quality}, size: {size}"
+            )
 
             # Create a dictionary of parameters for the API call
             params = {
@@ -419,16 +452,18 @@ async def edit_image_upload(
                 if "input_tokens_details" in response["usage"]:
                     input_tokens_details = InputTokensDetails(
                         text_tokens=response["usage"]["input_tokens_details"].get(
-                            "text_tokens", 0),
+                            "text_tokens", 0
+                        ),
                         image_tokens=response["usage"]["input_tokens_details"].get(
-                            "image_tokens", 0)
+                            "image_tokens", 0
+                        ),
                     )
 
                 token_usage = TokenUsage(
                     total_tokens=response["usage"].get("total_tokens", 0),
                     input_tokens=response["usage"].get("input_tokens", 0),
                     output_tokens=response["usage"].get("output_tokens", 0),
-                    input_tokens_details=input_tokens_details
+                    input_tokens_details=input_tokens_details,
                 )
 
                 # Log token usage for cost tracking
@@ -440,7 +475,7 @@ async def edit_image_upload(
                 success=True,
                 message="Refer to the imgen_model_response for details",
                 imgen_model_response=response,
-                token_usage=token_usage
+                token_usage=token_usage,
             )
 
         finally:
@@ -451,12 +486,10 @@ async def edit_image_upload(
                     if os.path.exists(path):
                         os.remove(path)
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to remove temp file {path}: {str(e)}")
+                    logger.warning(f"Failed to remove temp file {path}: {str(e)}")
 
     except Exception as e:
-        logger.error(
-            f"Error in /edit/upload endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Error in /edit/upload endpoint: {str(e)}", exc_info=True)
         # Provide more explicit errors for debugging
         error_detail = str(e)
         if isinstance(e, HTTPException):
@@ -468,26 +501,29 @@ async def edit_image_upload(
 async def save_generated_images(
     request: ImageSaveRequest,
     azure_storage_service: AzureBlobStorageService = Depends(
-        lambda: AzureBlobStorageService())
+        lambda: AzureBlobStorageService()
+    ),
+    cosmos_service: Optional[CosmosDBService] = Depends(get_cosmos_service),
 ):
     """
-    Save generated images to blob storage
-
-    Takes the output from the generate endpoint, converts base64 images to files,
-    and uploads them to Azure Blob Storage.
+    Save generated images to blob storage and create metadata records in Cosmos DB
     """
     try:
         # Check if we have a valid generation response
-        if not request.generation_response or not request.generation_response.imgen_model_response:
+        if (
+            not request.generation_response
+            or not request.generation_response.imgen_model_response
+        ):
             raise HTTPException(
-                status_code=400, detail="No valid image generation response provided")
+                status_code=400, detail="No valid image generation response provided"
+            )
 
         # Extract image data from the generation response
-        images_data = request.generation_response.imgen_model_response.get("data", [
-        ])
+        images_data = request.generation_response.imgen_model_response.get("data", [])
         if not images_data:
             raise HTTPException(
-                status_code=400, detail="No images found in the generation response")
+                status_code=400, detail="No images found in the generation response"
+            )
 
         # Process only the first image if save_all is False
         if not request.save_all:
@@ -499,7 +535,6 @@ async def save_generated_images(
             metadata["prompt"] = request.prompt
         if request.model:
             metadata["model"] = request.model
-            # Add gpt-image-1 specific metadata
             if request.model == "gpt-image-1" and hasattr(request, "quality"):
                 metadata["quality"] = request.quality
             if request.model == "gpt-image-1" and hasattr(request, "background"):
@@ -517,102 +552,88 @@ async def save_generated_images(
             if "b64_json" in img_data:
                 # Decode base64 image
                 image_bytes = base64.b64decode(img_data["b64_json"])
-
-                # Create a file-like object
                 img_file = io.BytesIO(image_bytes)
 
                 # Use PIL to determine image format and handle transparent background
                 with Image.open(img_file) as img:
                     img_format = img.format or "PNG"
-                    has_transparency = img.mode == 'RGBA' and 'A' in img.getbands()
+                    has_transparency = img.mode == "RGBA" and "A" in img.getbands()
 
                     if has_transparency:
                         metadata["has_transparency"] = "true"
-                        # Ensure PNG format for transparent images
                         if img_format.upper() != "PNG":
                             img_format = "PNG"
                             img_file = io.BytesIO()
                             img.save(img_file, format="PNG")
 
-                # Reset file pointer
                 img_file.seek(0)
 
-                # Generate intelligent filename using the existing endpoint
+                # Generate intelligent filename
                 if request.prompt:
                     filename = await generate_filename_for_prompt(
-                        request.prompt,
-                        f".{img_format.lower()}"
+                        request.prompt, f".{img_format.lower()}"
                     )
 
-                    # Add index suffix for multiple images
                     if filename and len(images_data) > 1:
-                        # Insert index before the extension
                         path = Path(filename)
                         stem = path.stem
                         suffix = path.suffix
-                        filename = f"{stem}_{idx+1}{suffix}"
-                        logger.info(
-                            f"Using generated filename with index: {filename}")
-                    elif filename:
-                        logger.info(f"Using generated filename: {filename}")
+                        filename = f"{stem}_{idx + 1}{suffix}"
 
-                # Fallback to default naming if filename generation fails
                 if not filename:
-                    quality_suffix = f"_{request.quality}" if request.model == "gpt-image-1" and hasattr(
-                        request, "quality") else ""
-                    filename = f"generated_image_{idx+1}{quality_suffix}.{img_format.lower()}"
+                    quality_suffix = (
+                        f"_{request.quality}"
+                        if request.model == "gpt-image-1"
+                        and hasattr(request, "quality")
+                        else ""
+                    )
+                    filename = f"generated_image_{idx + 1}{quality_suffix}.{img_format.lower()}"
                     filename = normalize_filename(filename)
-                    logger.info(f"Using fallback filename: {filename}")
 
             elif "url" in img_data:
                 # Download image from URL
                 response = requests.get(img_data["url"])
                 if response.status_code != 200:
                     logger.error(
-                        f"Failed to download image from URL: {img_data['url']}")
+                        f"Failed to download image from URL: {img_data['url']}"
+                    )
                     continue
 
-                # Create a file-like object
                 img_file = io.BytesIO(response.content)
-
-                # Determine content type and file extension
-                content_type = response.headers.get(
-                    "Content-Type", "image/png")
+                content_type = response.headers.get("Content-Type", "image/png")
                 ext = content_type.split("/")[-1]
 
-                # Check if image has transparency using PIL
+                # Check transparency
                 with Image.open(img_file) as img:
-                    has_transparency = img.mode == 'RGBA' and 'A' in img.getbands()
+                    has_transparency = img.mode == "RGBA" and "A" in img.getbands()
                     if has_transparency:
                         metadata["has_transparency"] = "true"
 
-                # Reset file pointer
                 img_file.seek(0)
 
-                # Generate intelligent filename using the existing endpoint
+                # Generate filename
                 if request.prompt:
                     filename = await generate_filename_for_prompt(
-                        request.prompt,
-                        f".{ext}"
+                        request.prompt, f".{ext}"
                     )
 
-                    # Add index suffix for multiple images
                     if filename and len(images_data) > 1:
-                        # Insert index before the extension
                         path = Path(filename)
                         stem = path.stem
                         suffix = path.suffix
-                        filename = f"{stem}_{idx+1}{suffix}"
+                        filename = f"{stem}_{idx + 1}{suffix}"
 
-                # Fallback to default naming if filename generation fails
                 if not filename:
-                    quality_suffix = f"_{request.quality}" if request.model == "gpt-image-1" and hasattr(
-                        request, "quality") else ""
-                    filename = f"generated_image_{idx+1}{quality_suffix}.{ext}"
+                    quality_suffix = (
+                        f"_{request.quality}"
+                        if request.model == "gpt-image-1"
+                        and hasattr(request, "quality")
+                        else ""
+                    )
+                    filename = f"generated_image_{idx + 1}{quality_suffix}.{ext}"
                     filename = normalize_filename(filename)
             else:
-                logger.warning(
-                    f"Unsupported image data format for image {idx+1}")
+                logger.warning(f"Unsupported image data format for image {idx + 1}")
                 continue
 
             if img_file and filename:
@@ -621,7 +642,7 @@ async def save_generated_images(
                 img_metadata["image_index"] = str(idx + 1)
                 img_metadata["total_images"] = str(len(images_data))
 
-                # Create a FastAPI UploadFile object
+                # Create FastAPI UploadFile object
                 file = UploadFile(filename=filename, file=img_file)
 
                 # Upload to Azure Blob Storage
@@ -629,29 +650,64 @@ async def save_generated_images(
                     file,
                     MediaType.IMAGE.value,
                     metadata=img_metadata,
-                    folder_path=request.folder_path
+                    folder_path=request.folder_path,
                 )
 
-                # Add to saved images
-                saved_images.append(result)
+                # Create metadata record in Cosmos DB if available
+                if cosmos_service:
+                    try:
+                        # Extract asset ID from blob name
+                        asset_id = result["blob_name"].split(".")[0].split("/")[-1]
 
-                # Close the file
+                        # Prepare enhanced metadata for Cosmos DB
+                        cosmos_metadata = {
+                            "id": asset_id,
+                            "media_type": "image",
+                            "blob_name": result["blob_name"],
+                            "container": result["container"],
+                            "url": result["url"],
+                            "filename": result["original_filename"],
+                            "size": result["size"],
+                            "content_type": result["content_type"],
+                            "folder_path": result["folder_path"],
+                            "prompt": request.prompt,
+                            "model": request.model,
+                            "quality": getattr(request, "quality", None),
+                            "background": getattr(request, "background", None),
+                            "output_format": getattr(request, "output_format", None),
+                            "has_transparency": has_transparency
+                            if "has_transparency" in locals()
+                            else None,
+                            "custom_metadata": img_metadata,
+                        }
+
+                        # Remove None values
+                        cosmos_metadata = {
+                            k: v for k, v in cosmos_metadata.items() if v is not None
+                        }
+
+                        cosmos_service.create_asset_metadata(cosmos_metadata)
+                        logger.info(f"Created Cosmos DB metadata for image: {asset_id}")
+                    except Exception as cosmos_error:
+                        logger.warning(
+                            f"Failed to create Cosmos DB metadata for image: {cosmos_error}"
+                        )
+
+                saved_images.append(result)
                 await file.close()
 
-        # Return the response
         return ImageSaveResponse(
             success=True,
-            message=f"Successfully saved {len(saved_images)} images to blob storage",
+            message=f"Successfully saved {len(saved_images)} images to blob storage and metadata",
             saved_images=saved_images,
             total_saved=len(saved_images),
-            prompt=request.prompt
+            prompt=request.prompt,
         )
 
     except Exception as e:
         logger.error(f"Error saving generated images: {str(e)}", exc_info=True)
         raise HTTPException(
-            status_code=500,
-            detail=f"Error saving generated images: {str(e)}"
+            status_code=500, detail=f"Error saving generated images: {str(e)}"
         )
 
 
@@ -665,11 +721,7 @@ async def list_images(request: ImageListRequest):
         # - Add image URLs and metadata
 
         return ImageListResponse(
-            success=True,
-            images=[],
-            total=0,
-            limit=request.limit,
-            offset=request.offset
+            success=True, images=[], total=0, limit=request.limit, offset=request.offset
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -687,7 +739,7 @@ async def delete_image(request: ImageDeleteRequest):
         return ImageDeleteResponse(
             success=True,
             message=f"Image deletion endpoint (skeleton)",
-            image_id=request.image_id
+            image_id=request.image_id,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -730,7 +782,7 @@ def analyze_image(req: ImageAnalyzeRequest):
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=response.status_code,
-                    detail=f"Failed to download image: HTTP {response.status_code}"
+                    detail=f"Failed to download image: HTTP {response.status_code}",
                 )
 
             # Get image content from response
@@ -743,8 +795,7 @@ def analyze_image(req: ImageAnalyzeRequest):
                 image_content = base64.b64decode(req.base64_image)
             except Exception as e:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid base64 image data: {str(e)}"
+                    status_code=400, detail=f"Invalid base64 image data: {str(e)}"
                 )
 
         # Process the image with PIL to handle transparency properly
@@ -752,20 +803,19 @@ def analyze_image(req: ImageAnalyzeRequest):
             # Open the image with PIL
             with Image.open(io.BytesIO(image_content)) as img:
                 # Check if it's a transparent PNG
-                has_transparency = img.mode == 'RGBA' and 'A' in img.getbands()
+                has_transparency = img.mode == "RGBA" and "A" in img.getbands()
 
                 if has_transparency:
                     # Create a white background
-                    background = Image.new(
-                        'RGBA', img.size, (255, 255, 255, 255))
+                    background = Image.new("RGBA", img.size, (255, 255, 255, 255))
                     # Paste the image on the background
                     background.paste(img, (0, 0), img)
                     # Convert to RGB (remove alpha channel)
-                    background = background.convert('RGB')
+                    background = background.convert("RGB")
 
                     # Save to bytes
                     img_byte_arr = io.BytesIO()
-                    background.save(img_byte_arr, format='JPEG')
+                    background.save(img_byte_arr, format="JPEG")
                     img_byte_arr.seek(0)
                     image_content = img_byte_arr.getvalue()
 
@@ -785,15 +835,16 @@ def analyze_image(req: ImageAnalyzeRequest):
                     # Resize the image
                     if has_transparency:
                         # We already have the background image from above
-                        resized_img = background.resize(
-                            (new_width, new_height))
+                        resized_img = background.resize((new_width, new_height))
                     else:
                         resized_img = img.resize((new_width, new_height))
 
                     # Save to bytes
                     img_byte_arr = io.BytesIO()
                     resized_img.save(
-                        img_byte_arr, format='JPEG' if resized_img.mode == 'RGB' else 'PNG')
+                        img_byte_arr,
+                        format="JPEG" if resized_img.mode == "RGB" else "PNG",
+                    )
                     img_byte_arr.seek(0)
                     image_content = img_byte_arr.getvalue()
         except Exception as img_error:
@@ -801,28 +852,26 @@ def analyze_image(req: ImageAnalyzeRequest):
             # If PIL processing fails, continue with the original image
 
         # Convert to base64
-        image_base64 = base64.b64encode(image_content).decode('utf-8')
+        image_base64 = base64.b64encode(image_content).decode("utf-8")
         # Remove data URL prefix if present
         image_base64 = re.sub(r"^data:image/.+;base64,", "", image_base64)
 
         # analyze the image using the LLM
         image_analyzer = ImageAnalyzer(llm_client, settings.LLM_DEPLOYMENT)
-        insights = image_analyzer.image_chat(
-            image_base64, analyze_image_system_message)
+        insights = image_analyzer.image_chat(image_base64, analyze_image_system_message)
 
-        description = insights.get('description')
-        products = insights.get('products')
-        tags = insights.get('tags')
-        feedback = insights.get('feedback')
+        description = insights.get("description")
+        products = insights.get("products")
+        tags = insights.get("tags")
+        feedback = insights.get("feedback")
 
-        return ImageAnalyzeResponse(description=description, products=products, tags=tags, feedback=feedback)
+        return ImageAnalyzeResponse(
+            description=description, products=products, tags=tags, feedback=feedback
+        )
 
     except Exception as e:
         logger.error(f"Error analyzing image: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error analyzing image: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error analyzing image: {str(e)}")
 
 
 @router.post("/prompt/enhance", response_model=ImagePromptEnhancementResponse)
@@ -837,7 +886,7 @@ def enhance_image_prompt(req: ImagePromptEnhancementRequest):
         if llm_client is None:
             raise HTTPException(
                 status_code=503,
-                detail="LLM service is currently unavailable. Please check your environment configuration."
+                detail="LLM service is currently unavailable. Please check your environment configuration.",
             )
 
         original_prompt = req.original_prompt
@@ -846,11 +895,12 @@ def enhance_image_prompt(req: ImagePromptEnhancementRequest):
             {"role": "system", "content": system_message},
             {"role": "user", "content": original_prompt},
         ]
-        response = llm_client.chat.completions.create(messages=messages,
-                                                      model=settings.LLM_DEPLOYMENT,
-                                                      response_format={"type": "json_object"})
-        enhanced_prompt = json.loads(
-            response.choices[0].message.content).get('prompt')
+        response = llm_client.chat.completions.create(
+            messages=messages,
+            model=settings.LLM_DEPLOYMENT,
+            response_format={"type": "json_object"},
+        )
+        enhanced_prompt = json.loads(response.choices[0].message.content).get("prompt")
         return ImagePromptEnhancementResponse(enhanced_prompt=enhanced_prompt)
 
     except Exception as e:
@@ -867,18 +917,22 @@ def protect_image_prompt(req: ImagePromptBrandProtectionRequest):
         if req.brands_to_protect:
             if req.protection_mode == "replace":
                 system_message = brand_protect_replace_msg.format(
-                    brands=req.brands_to_protect)
+                    brands=req.brands_to_protect
+                )
             elif req.protection_mode == "neutralize":
                 system_message = brand_protect_neutralize_msg.format(
-                    brands=req.brands_to_protect)
+                    brands=req.brands_to_protect
+                )
         else:
-            return ImagePromptBrandProtectionResponse(enhanced_prompt=req.original_prompt)
+            return ImagePromptBrandProtectionResponse(
+                enhanced_prompt=req.original_prompt
+            )
 
         # Ensure LLM client is available
         if llm_client is None:
             raise HTTPException(
                 status_code=503,
-                detail="LLM service is currently unavailable. Please check your environment configuration."
+                detail="LLM service is currently unavailable. Please check your environment configuration.",
             )
 
         original_prompt = req.original_prompt
@@ -887,11 +941,12 @@ def protect_image_prompt(req: ImagePromptBrandProtectionRequest):
             {"role": "system", "content": system_message},
             {"role": "user", "content": original_prompt},
         ]
-        response = llm_client.chat.completions.create(messages=messages,
-                                                      model=settings.LLM_DEPLOYMENT,
-                                                      response_format={"type": "json_object"})
-        enhanced_prompt = json.loads(
-            response.choices[0].message.content).get('prompt')
+        response = llm_client.chat.completions.create(
+            messages=messages,
+            model=settings.LLM_DEPLOYMENT,
+            response_format={"type": "json_object"},
+        )
+        enhanced_prompt = json.loads(response.choices[0].message.content).get("prompt")
         return ImagePromptEnhancementResponse(enhanced_prompt=enhanced_prompt)
 
     except Exception as e:
@@ -917,15 +972,12 @@ def generate_image_filename(req: ImageFilenameGenerateRequest):
         if llm_client is None:
             raise HTTPException(
                 status_code=503,
-                detail="LLM service is currently unavailable. Please check your environment configuration."
+                detail="LLM service is currently unavailable. Please check your environment configuration.",
             )
 
         # Validate prompt
         if not req.prompt or not req.prompt.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="Prompt must not be empty."
-            )
+            raise HTTPException(status_code=400, detail="Prompt must not be empty.")
 
         # Call the LLM to enhance the prompt
         messages = [
@@ -935,28 +987,27 @@ def generate_image_filename(req: ImageFilenameGenerateRequest):
         response = llm_client.chat.completions.create(
             messages=messages,
             model=settings.LLM_DEPLOYMENT,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        filename = json.loads(
-            response.choices[0].message.content).get('filename_prefix')
+        filename = json.loads(response.choices[0].message.content).get(
+            "filename_prefix"
+        )
 
         # Validate and sanitize filename
         if not filename or not filename.strip():
             raise HTTPException(
-                status_code=500,
-                detail="Failed to generate a valid filename prefix."
+                status_code=500, detail="Failed to generate a valid filename prefix."
             )
         # Remove invalid characters for most filesystems
-        filename = re.sub(r'[^a-zA-Z0-9_\-]', '_', filename.strip())
+        filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", filename.strip())
 
         # add a sort unique identifier to the filename
         uid = uuid.uuid4()
-        short_uid = base64.urlsafe_b64encode(
-            uid.bytes).rstrip(b'=').decode('ascii')
+        short_uid = base64.urlsafe_b64encode(uid.bytes).rstrip(b"=").decode("ascii")
         filename += f"_{short_uid}"
 
         if req.extension:
-            ext = req.extension.lstrip('.')
+            ext = req.extension.lstrip(".")
             filename += f".{ext}"
 
         return ImageFilenameGenerateResponse(filename=filename)
