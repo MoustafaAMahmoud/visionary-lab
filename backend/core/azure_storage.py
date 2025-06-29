@@ -2,9 +2,9 @@ import os
 import uuid
 from typing import Dict, BinaryIO, Optional, Union, List, Tuple
 from fastapi import UploadFile
-from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from backend.core.config import settings
 
@@ -400,6 +400,41 @@ class AzureBlobStorageService:
         except Exception as e:
             return False
 
+    def generate_blob_sas_url(self, blob_name: str, container_name: str, 
+                               expiry_hours: int = 1, permission: str = "r") -> str:
+        """
+        Generate a SAS URL for a specific blob
+        
+        Args:
+            blob_name: Name of the blob
+            container_name: Name of the container
+            expiry_hours: Hours until the SAS token expires (default 1)
+            permission: Permissions for the SAS token (default "r" for read)
+            
+        Returns:
+            Full URL with SAS token for accessing the blob
+        """
+        try:
+            # Set expiry time
+            expiry_time = datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
+            
+            # Generate SAS token for the specific blob
+            sas_token = generate_blob_sas(
+                account_name=settings.AZURE_STORAGE_ACCOUNT_NAME,
+                container_name=container_name,
+                blob_name=blob_name,
+                account_key=settings.AZURE_STORAGE_ACCOUNT_KEY,
+                permission=BlobSasPermissions(read=True),
+                expiry=expiry_time
+            )
+            
+            # Construct the full URL
+            blob_url = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}"
+            
+            return blob_url
+        except Exception as e:
+            raise Exception(f"Failed to generate SAS URL: {str(e)}")
+    
     def _get_content_type(self, extension: str, asset_type: str) -> str:
         """
         Determine content type based on file extension
