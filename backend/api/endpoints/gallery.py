@@ -40,17 +40,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def get_cosmos_service() -> Optional[CosmosDBService]:
-    """Dependency to get Cosmos DB service instance (optional)"""
+def get_cosmos_service() -> CosmosDBService:
+    """Dependency to get Cosmos DB service instance (required)"""
     try:
-        if settings.AZURE_COSMOS_DB_ENDPOINT and settings.AZURE_COSMOS_DB_KEY:
-            return CosmosDBService()
-        return None
+        if settings.AZURE_COSMOS_DB_ENDPOINT:
+            # Check if we have either API key or can use managed identity
+            if settings.AZURE_COSMOS_DB_KEY or settings.USE_MANAGED_IDENTITY:
+                return CosmosDBService()
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Cosmos DB endpoint configured but no API key or managed identity enabled"
+                )
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail="Cosmos DB not configured. Please set AZURE_COSMOS_DB_ENDPOINT and AZURE_COSMOS_DB_KEY"
+            )
+    except HTTPException:
+        raise
     except Exception as e:
-        # Log error but don't fail - Cosmos DB is optional
-
-        logger.warning(f"Cosmos DB service unavailable: {e}")
-        return None
+        logger.error(f"Cosmos DB service initialization failed: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to initialize Cosmos DB service: {str(e)}"
+        )
 
 
 @router.get("/images", response_model=GalleryResponse)
@@ -64,17 +78,20 @@ async def get_gallery_images(
     ),
     tags: Optional[str] = Query(None, description="Comma-separated tags to filter by"),
     cosmos_service: CosmosDBService = Depends(get_cosmos_service),
+    azure_storage_service: AzureBlobStorageService = Depends(
+        lambda: AzureBlobStorageService()
+    ),
 ):
-    """Get gallery images from Cosmos DB metadata ONLY"""
+    """Get gallery images from Cosmos DB metadata with SAS token generation"""
     try:
         # Parse tags if provided
         tag_list = None
         if tags:
             tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-        # Query Cosmos DB for images only
+        # Query Cosmos DB for images
         result = cosmos_service.query_assets(
-            media_type="image",  # Images only
+            media_type="image",
             folder_path=folder_path,
             tags=tag_list,
             limit=limit,
@@ -85,12 +102,19 @@ async def get_gallery_images(
 
         gallery_items = []
         for metadata in result["items"]:
+            # Generate SAS URL for the blob
+            sas_url = azure_storage_service.generate_blob_sas_url(
+                blob_name=metadata["blob_name"],
+                container_name=metadata["container"],
+                expiry_hours=24  # 24 hour expiry for gallery viewing
+            )
+            
             gallery_items.append(
                 GalleryItem(
                     id=metadata["id"],
                     name=metadata["blob_name"],
                     media_type=MediaType.IMAGE,
-                    url=metadata["url"],
+                    url=sas_url,  # Use SAS URL instead of stored URL
                     container=metadata["container"],
                     size=metadata["size"],
                     content_type=metadata.get("content_type"),
@@ -119,7 +143,7 @@ async def get_gallery_images(
 
         return GalleryResponse(
             success=True,
-            message=f"Retrieved {len(gallery_items)} images from metadata service",
+            message=f"Retrieved {len(gallery_items)} images from Cosmos DB",
             total=result["total"],
             limit=limit,
             offset=offset,
@@ -127,14 +151,12 @@ async def get_gallery_images(
             continuation_token=None,
             folders=None,
         )
+        
     except Exception as e:
-        import logging
-
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error retrieving images from metadata: {str(e)}")
+        logger.error(f"Error retrieving images: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to retrieve images from metadata service: {str(e)}",
+            detail=f"Failed to retrieve images: {str(e)}",
         )
 
 
@@ -149,17 +171,20 @@ async def get_gallery_videos(
     ),
     tags: Optional[str] = Query(None, description="Comma-separated tags to filter by"),
     cosmos_service: CosmosDBService = Depends(get_cosmos_service),
+    azure_storage_service: AzureBlobStorageService = Depends(
+        lambda: AzureBlobStorageService()
+    ),
 ):
-    """Get gallery videos from Cosmos DB metadata ONLY"""
+    """Get gallery videos from Cosmos DB metadata with SAS token generation"""
     try:
         # Parse tags if provided
         tag_list = None
         if tags:
             tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-        # Query Cosmos DB for videos only
+        # Query Cosmos DB for videos
         result = cosmos_service.query_assets(
-            media_type="video",  # Videos only
+            media_type="video",
             folder_path=folder_path,
             tags=tag_list,
             limit=limit,
@@ -170,12 +195,19 @@ async def get_gallery_videos(
 
         gallery_items = []
         for metadata in result["items"]:
+            # Generate SAS URL for the blob
+            sas_url = azure_storage_service.generate_blob_sas_url(
+                blob_name=metadata["blob_name"],
+                container_name=metadata["container"],
+                expiry_hours=24  # 24 hour expiry for gallery viewing
+            )
+            
             gallery_items.append(
                 GalleryItem(
                     id=metadata["id"],
                     name=metadata["blob_name"],
                     media_type=MediaType.VIDEO,
-                    url=metadata["url"],
+                    url=sas_url,  # Use SAS URL instead of stored URL
                     container=metadata["container"],
                     size=metadata["size"],
                     content_type=metadata.get("content_type"),
@@ -201,7 +233,7 @@ async def get_gallery_videos(
 
         return GalleryResponse(
             success=True,
-            message=f"Retrieved {len(gallery_items)} videos from metadata service",
+            message=f"Retrieved {len(gallery_items)} videos from Cosmos DB",
             total=result["total"],
             limit=limit,
             offset=offset,
@@ -209,14 +241,12 @@ async def get_gallery_videos(
             continuation_token=None,
             folders=None,
         )
+        
     except Exception as e:
-        import logging
-
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error retrieving videos from metadata: {str(e)}")
+        logger.error(f"Error retrieving videos: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to retrieve videos from metadata service: {str(e)}",
+            detail=f"Failed to retrieve videos: {str(e)}",
         )
 
 
@@ -226,211 +256,103 @@ async def get_gallery_items(
         50, description="Maximum number of items to return", ge=1, le=100
     ),
     offset: int = Query(0, description="Offset for pagination"),
-    continuation_token: Optional[str] = Query(
-        None, description="Continuation token from previous response"
-    ),
-    prefix: Optional[str] = Query(
-        None, description="Optional prefix filter for filenames"
-    ),
     folder_path: Optional[str] = Query(
         None, description="Optional folder path to filter assets"
     ),
-    use_metadata: bool = Query(
-        True, description="Use Cosmos DB metadata for faster queries if available"
-    ),
+    tags: Optional[str] = Query(None, description="Comma-separated tags to filter by"),
+    media_type: Optional[str] = Query(None, description="Filter by media type (image or video)"),
+    cosmos_service: CosmosDBService = Depends(get_cosmos_service),
     azure_storage_service: AzureBlobStorageService = Depends(
         lambda: AzureBlobStorageService()
     ),
-    cosmos_service: Optional[CosmosDBService] = Depends(get_cosmos_service),
 ):
     """
-    Get all gallery items (images and videos) with pagination
-    Uses Cosmos DB for faster metadata queries if available, falls back to blob storage
+    Get all gallery items (images and videos) from Cosmos DB with SAS token generation
     """
     try:
-        # If Cosmos DB is available and requested, use it for faster queries
-        if cosmos_service and use_metadata and not continuation_token:
-            return await _get_gallery_items_from_cosmos(
-                limit=limit,
-                offset=offset,
-                folder_path=folder_path,
-                cosmos_service=cosmos_service,
-            )
-
-        # Fall back to original blob storage implementation
-        return await _get_gallery_items_from_storage(
-            limit=limit,
-            offset=offset,
-            continuation_token=continuation_token,
-            prefix=prefix,
-            folder_path=folder_path,
-            azure_storage_service=azure_storage_service,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def _get_gallery_items_from_cosmos(
-    limit: int, offset: int, folder_path: Optional[str], cosmos_service: CosmosDBService
-) -> GalleryResponse:
-    """Get gallery items using Cosmos DB metadata"""
-    try:
+        # Parse tags if provided
+        tag_list = None
+        if tags:
+            tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+        
+        # Query Cosmos DB for all media types or filtered by type
         result = cosmos_service.query_assets(
+            media_type=media_type,  # None means both images and videos
             folder_path=folder_path,
+            tags=tag_list,
             limit=limit,
             offset=offset,
             order_by="created_at",
             order_desc=True,
         )
-
+        
         gallery_items = []
         for metadata in result["items"]:
-            # Convert Cosmos DB metadata to GalleryItem
+            # Generate SAS URL for the blob
+            sas_url = azure_storage_service.generate_blob_sas_url(
+                blob_name=metadata["blob_name"],
+                container_name=metadata["container"],
+                expiry_hours=24  # 24 hour expiry for gallery viewing
+            )
+            
+            # Build metadata based on media type
+            item_metadata = {
+                "prompt": metadata.get("prompt", ""),
+                "model": metadata.get("model", ""),
+                "summary": metadata.get("summary", ""),
+                "description": metadata.get("description", ""),
+                "products": metadata.get("products", ""),
+                "tags": ",".join(metadata.get("tags", [])),
+                "generation_id": metadata.get("generation_id", ""),
+            }
+            
+            # Add media-specific metadata
+            if metadata["media_type"] == "image":
+                item_metadata.update({
+                    "quality": metadata.get("quality", ""),
+                    "background": metadata.get("background", ""),
+                    "output_format": metadata.get("output_format", ""),
+                    "has_transparency": str(metadata.get("has_transparency", False)),
+                })
+            else:  # video
+                item_metadata.update({
+                    "duration": str(metadata.get("duration", "")),
+                    "resolution": metadata.get("resolution", ""),
+                    "fps": str(metadata.get("fps", "")),
+                })
+            
+            # Add custom metadata
+            item_metadata.update(metadata.get("custom_metadata", {}))
+            
             gallery_items.append(
                 GalleryItem(
                     id=metadata["id"],
                     name=metadata["blob_name"],
                     media_type=MediaType(metadata["media_type"]),
-                    url=metadata["url"],
+                    url=sas_url,  # Use SAS URL instead of stored URL
                     container=metadata["container"],
                     size=metadata["size"],
                     content_type=metadata.get("content_type"),
                     creation_time=metadata["created_at"],
                     last_modified=metadata["updated_at"],
-                    metadata=metadata.get("custom_metadata", {}),
+                    metadata=item_metadata,
                     folder_path=metadata.get("folder_path", ""),
                 )
             )
-
+        
         return GalleryResponse(
             success=True,
-            message="Gallery items retrieved successfully from metadata",
+            message=f"Retrieved {len(gallery_items)} items from Cosmos DB",
             total=result["total"],
             limit=limit,
             offset=offset,
             items=gallery_items,
-            continuation_token=None,  # Cosmos DB uses offset-based pagination
+            continuation_token=None,
             folders=None,
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error querying metadata: {str(e)}"
-        )
-
-
-async def _get_gallery_items_from_storage(
-    limit: int,
-    offset: int,
-    continuation_token: Optional[str],
-    prefix: Optional[str],
-    folder_path: Optional[str],
-    azure_storage_service: AzureBlobStorageService,
-) -> GalleryResponse:
-    """Get gallery items using Azure Blob Storage (original implementation)"""
-    # Normalize folder path and update prefix if folder_path is provided
-    if folder_path is not None:
-        normalized_folder = azure_storage_service.normalize_folder_path(folder_path)
-        prefix = normalized_folder
-
-    # Get images
-    image_container = settings.AZURE_BLOB_IMAGE_CONTAINER
-    image_results = azure_storage_service.list_blobs(
-        container_name=image_container,
-        prefix=prefix,
-        limit=limit,
-        marker=continuation_token,
-        delimiter="/" if folder_path is not None else None,
-    )
-
-    # Get videos
-    video_container = settings.AZURE_BLOB_VIDEO_CONTAINER
-    video_results = azure_storage_service.list_blobs(
-        container_name=video_container,
-        prefix=prefix,
-        limit=limit,
-        marker=continuation_token,
-        delimiter="/" if folder_path is not None else None,
-    )
-
-    # Combine results
-    gallery_items = []
-
-    # Process image results
-    for blob in image_results["blobs"]:
-        if blob["name"].endswith(".folder"):
-            continue
-
-        gallery_items.append(
-            GalleryItem(
-                id=blob["name"].split(".")[0].split("/")[-1],
-                name=blob["name"],
-                media_type=MediaType.IMAGE,
-                url=blob["url"],
-                container=image_container,
-                size=blob["size"],
-                content_type=blob["content_type"],
-                creation_time=blob["creation_time"],
-                last_modified=blob["last_modified"],
-                metadata=blob["metadata"],
-                folder_path=blob.get("folder_path", ""),
-            )
-        )
-
-    # Process video results
-    for blob in video_results["blobs"]:
-        if blob["name"].endswith(".folder"):
-            continue
-
-        gallery_items.append(
-            GalleryItem(
-                id=blob["name"].split(".")[0].split("/")[-1],
-                name=blob["name"],
-                media_type=MediaType.VIDEO,
-                url=blob["url"],
-                container=video_container,
-                size=blob["size"],
-                content_type=blob["content_type"],
-                creation_time=blob["creation_time"],
-                last_modified=blob["last_modified"],
-                metadata=blob["metadata"],
-                folder_path=blob.get("folder_path", ""),
-            )
-        )
-
-    # Sort by creation_time (newest first)
-    gallery_items.sort(
-        key=lambda x: x.creation_time if x.creation_time else "", reverse=True
-    )
-
-    # Apply offset and limit
-    paginated_items = gallery_items[offset : offset + limit]
-
-    # Get continuation token from either result
-    continuation = None
-    if image_results["continuation_token"] or video_results["continuation_token"]:
-        continuation = (
-            image_results["continuation_token"]
-            if image_results["continuation_token"]
-            else video_results["continuation_token"]
-        )
-
-    # Combine folder prefixes from both containers
-    folders = set()
-    if "prefixes" in image_results:
-        folders.update(image_results["prefixes"])
-    if "prefixes" in video_results:
-        folders.update(video_results["prefixes"])
-
-    return GalleryResponse(
-        success=True,
-        message="Gallery items retrieved successfully from storage",
-        total=len(gallery_items),
-        limit=limit,
-        offset=offset,
-        items=paginated_items,
-        continuation_token=continuation,
-        folders=sorted(list(folders)) if folders else None,
-    )
+        logger.error(f"Error retrieving gallery items: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/upload", response_model=AssetUploadResponse)
@@ -842,3 +764,40 @@ async def metadata_service_status(
         }
 
     return status
+
+
+@router.get("/folders", response_model=Dict[str, Any])
+async def get_folders(
+    media_type: Optional[str] = Query(None, description="Filter by media type (image or video)"),
+    cosmos_service: CosmosDBService = Depends(get_cosmos_service),
+):
+    """
+    Get all folders for a given media type from Cosmos DB
+    """
+    try:
+        # Get folder statistics from Cosmos DB
+        folder_stats = cosmos_service.get_folder_stats(media_type=media_type)
+        
+        # Extract unique folders with counts
+        folder_list = []
+        for stat in folder_stats["folder_stats"]:
+            if stat["folder_path"]:  # Exclude empty folder paths
+                folder_list.append({
+                    "path": stat["folder_path"],
+                    "count": stat["count"]
+                })
+        
+        # Sort by folder path
+        folder_list.sort(key=lambda x: x["path"])
+        
+        return {
+            "success": True,
+            "message": f"Retrieved {len(folder_list)} folders from Cosmos DB",
+            "folders": folder_list,
+            "total_folders": folder_stats["total_folders"],
+            "source": "cosmos_db"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting folders from Cosmos DB: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve folders: {str(e)}")

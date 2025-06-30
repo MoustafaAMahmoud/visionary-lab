@@ -21,6 +21,14 @@ param logAnalyticsWorkspaceName string = 'visionary-lab-log-analytics-workspace'
 @description('Unique name for the Storage Account (3-24 lowercase letters and numbers)')
 param storageAccountName string = 'a${toLower(uniqueString(resourceGroup().id, 'storage'))}'
 
+// Parameters for Azure Cosmos DB
+@description('Unique name for the Cosmos DB account (3-50 lowercase letters, numbers, and hyphens)')
+param cosmosAccountName string = 'cosmos-${toLower(uniqueString(resourceGroup().id, 'cosmos'))}'
+@description('Name of the Cosmos DB database')
+param cosmosDatabaseName string = 'visionarylab'
+@description('Name of the Cosmos DB container')
+param cosmosContainerName string = 'metadata'
+
 // Parameters for the OpenAI deployments
 @description('Name of the Azure OpenAI account')
 param llmOpenAiAccountName string = 'myOpenAiAccount'
@@ -57,10 +65,9 @@ module storageAccountMod './modules/storageAccount.bicep' = {
   }
 }
 
-// Azure Storage Account Container
-// This module creates a container in the storage account for storing images
-module storageContainerMod './modules/storageAccountContainer.bicep' = {
-  name: 'storageContainerMod'
+// Azure Storage Account Container for Images
+module storageContainerImagesMod './modules/storageAccountContainer.bicep' = {
+  name: 'storageContainerImagesMod'
   params: {
     storageAccountName: storageAccountName
     containerName: 'images'
@@ -69,6 +76,33 @@ module storageContainerMod './modules/storageAccountContainer.bicep' = {
   dependsOn: [
     storageAccountMod
   ]
+}
+
+// Azure Storage Account Container for Videos
+module storageContainerVideosMod './modules/storageAccountContainer.bicep' = {
+  name: 'storageContainerVideosMod'
+  params: {
+    storageAccountName: storageAccountName
+    containerName: 'videos'
+    deployNew: true  // set false to reuse an existing container
+  }
+  dependsOn: [
+    storageAccountMod
+  ]
+}
+
+// Azure Cosmos DB
+// This module creates a Cosmos DB account with serverless pricing for metadata storage
+module cosmosDbMod './modules/cosmosDb.bicep' = {
+  name: 'cosmosDbMod'
+  params: {
+    location: location
+    cosmosAccountName: cosmosAccountName
+    databaseName: cosmosDatabaseName
+    containerName: cosmosContainerName
+    partitionKey: '/media_type'
+    deployNew: true  // set false to reuse an existing Cosmos DB account
+  }
 }
 
 // OpenAI deployment module for LLM
@@ -123,7 +157,7 @@ module containerAppEnvMod './modules/containerAppEnv.bicep' = {
 // Container App for Backend
 // This module creates a container app for the backend service
 // It uses the container app environment created in the previous module
-// The container app is configured to use the Azure Blob Storage account and OpenAI deployments for LLM and image generation
+// The container app is configured to use Azure Blob Storage, Cosmos DB, and OpenAI deployments
 module containerAppBackend './modules/containerApp.bicep' = {
   name: 'containerAppBackend'
   params: {
@@ -136,6 +170,11 @@ module containerAppBackend './modules/containerApp.bicep' = {
     AZURE_STORAGE_ACCOUNT_KEY: storageAccountMod.outputs.storageAccountKey
     AZURE_STORAGE_ACCOUNT_NAME: storageAccountName
     AZURE_BLOB_IMAGE_CONTAINER: 'images'
+    AZURE_BLOB_VIDEO_CONTAINER: 'videos'
+    AZURE_COSMOS_DB_ENDPOINT: cosmosDbMod.outputs.cosmosEndpoint
+    AZURE_COSMOS_DB_KEY: cosmosDbMod.outputs.cosmosPrimaryKey
+    AZURE_COSMOS_DB_ID: cosmosDatabaseName
+    AZURE_COSMOS_CONTAINER_ID: cosmosContainerName
     DOCKER_IMAGE: DOCKER_IMAGE_BACKEND
     IMAGEGEN_AOAI_API_KEY: IMAGEGEN_AOAI_API_KEY
     LLM_AOAI_API_KEY: LLM_AOAI_API_KEY
@@ -145,14 +184,16 @@ module containerAppBackend './modules/containerApp.bicep' = {
   }
   dependsOn: [
     storageAccountMod
-    storageContainerMod
+    storageContainerImagesMod
+    storageContainerVideosMod
+    cosmosDbMod
   ]
 }
 
 // Container App for Frontend
 // This module creates a container app for the frontend service
 // It uses the container app environment created in the previous module
-// The container app is configured to use the Azure Blob Storage account and OpenAI deployments for LLM and image generation
+// The container app is configured to use Azure Blob Storage, Cosmos DB, and OpenAI deployments
 module containerAppFrontend './modules/containerApp.bicep' = {
   name: 'containerAppFrontend'
   params: {
@@ -165,6 +206,11 @@ module containerAppFrontend './modules/containerApp.bicep' = {
     AZURE_STORAGE_ACCOUNT_KEY: storageAccountMod.outputs.storageAccountKey
     AZURE_STORAGE_ACCOUNT_NAME: storageAccountName
     AZURE_BLOB_IMAGE_CONTAINER: 'images'
+    AZURE_BLOB_VIDEO_CONTAINER: 'videos'
+    AZURE_COSMOS_DB_ENDPOINT: cosmosDbMod.outputs.cosmosEndpoint
+    AZURE_COSMOS_DB_KEY: cosmosDbMod.outputs.cosmosPrimaryKey
+    AZURE_COSMOS_DB_ID: cosmosDatabaseName
+    AZURE_COSMOS_CONTAINER_ID: cosmosContainerName
     DOCKER_IMAGE: DOCKER_IMAGE_FRONTEND
     IMAGEGEN_AOAI_API_KEY: IMAGEGEN_AOAI_API_KEY
     LLM_AOAI_API_KEY: LLM_AOAI_API_KEY
@@ -174,6 +220,18 @@ module containerAppFrontend './modules/containerApp.bicep' = {
   }
   dependsOn: [
     storageAccountMod
-    storageContainerMod
+    storageContainerImagesMod
+    storageContainerVideosMod
+    cosmosDbMod
   ]
 }
+
+// Outputs
+output storageAccountName string = storageAccountMod.outputs.storageAccountName
+output storageAccountEndpoint string = storageAccountMod.outputs.storageAccountPrimaryEndpoint
+output cosmosAccountName string = cosmosDbMod.outputs.cosmosAccountName
+output cosmosEndpoint string = cosmosDbMod.outputs.cosmosEndpoint
+output cosmosDatabaseName string = cosmosDbMod.outputs.databaseName
+output cosmosContainerName string = cosmosDbMod.outputs.containerName
+output backendAppUrl string = 'https://${containerAppBackend.outputs.containerAppFqdn}'
+output frontendAppUrl string = 'https://${containerAppFrontend.outputs.containerAppFqdn}'

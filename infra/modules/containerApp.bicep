@@ -26,6 +26,13 @@ param AZURE_BLOB_SERVICE_URL string
 param AZURE_STORAGE_ACCOUNT_NAME string
 param AZURE_STORAGE_ACCOUNT_KEY string
 param AZURE_BLOB_IMAGE_CONTAINER string = 'images'
+param AZURE_BLOB_VIDEO_CONTAINER string = 'videos'
+// Azure Cosmos DB
+param AZURE_COSMOS_DB_ENDPOINT string = ''
+@secure()
+param AZURE_COSMOS_DB_KEY string = ''
+param AZURE_COSMOS_DB_ID string = 'visionarylab'
+param AZURE_COSMOS_CONTAINER_ID string = 'metadata'
 
 param targetPort int = 80
 param API_PROTOCOL string = 'http'
@@ -108,6 +115,26 @@ resource containerApp 'Microsoft.App/containerApps@2022-03-01' = if(deployNew) {
             {
               name: 'AZURE_BLOB_IMAGE_CONTAINER'
               value: AZURE_BLOB_IMAGE_CONTAINER
+            }
+            {
+              name: 'AZURE_BLOB_VIDEO_CONTAINER'
+              value: AZURE_BLOB_VIDEO_CONTAINER
+            }
+            {
+              name: 'AZURE_COSMOS_DB_ENDPOINT'
+              value: AZURE_COSMOS_DB_ENDPOINT
+            }
+            {
+              name: 'AZURE_COSMOS_DB_KEY'
+              value: AZURE_COSMOS_DB_KEY
+            }
+            {
+              name: 'AZURE_COSMOS_DB_ID'
+              value: AZURE_COSMOS_DB_ID
+            }
+            {
+              name: 'AZURE_COSMOS_CONTAINER_ID'
+              value: AZURE_COSMOS_CONTAINER_ID
             }
             {
               name: 'API_PROTOCOL'

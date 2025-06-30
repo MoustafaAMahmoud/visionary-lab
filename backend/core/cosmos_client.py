@@ -5,11 +5,9 @@ from datetime import datetime
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
 from azure.cosmos.container import ContainerProxy
 from azure.cosmos.database import DatabaseProxy
-from azure.identity import DefaultAzureCredential, ClientSecretCredential
-from backend.core.config import settings
-import azure.cosmos.cosmos_client as cosmos_client
 from azure.identity import DefaultAzureCredential, CredentialUnavailableError
 from azure.cosmos.exceptions import CosmosHttpResponseError
+from backend.core.config import settings
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -33,23 +31,32 @@ class CosmosDBService:
         self.database_id = settings.AZURE_COSMOS_DB_ID
         self.container_id = settings.AZURE_COSMOS_CONTAINER_ID
 
-        # Always use DefaultAzureCredential
-        try:
-            credential = DefaultAzureCredential(logging_enable=True)
-            self.logger.info("DefaultAzureCredential initialized successfully")
-
-        except CredentialUnavailableError as e:
-            self.logger.error(f"Credential unavailable: {str(e)}")
-            raise DatabaseError(
-                "Failed to authenticate with Azure: Credential unavailable."
+        # Use API key authentication when key is provided
+        if self.key and not settings.USE_MANAGED_IDENTITY:
+            # Use API key for authentication (master key auth)
+            self.client = CosmosClient(
+                self.endpoint,
+                self.key
             )
-        except Exception as e:
-            self.logger.error(f"Unexpected error during authentication: {str(e)}")
-            raise DatabaseError(f"Authentication error: {str(e)}")
-
-        self.client = cosmos_client.CosmosClient(
-            url=self.endpoint, credential=credential
-        )
+            self.logger.info("Cosmos DB client initialized with API key")
+        else:
+            # Use DefaultAzureCredential for managed identity scenarios
+            try:
+                credential = DefaultAzureCredential(logging_enable=True)
+                self.logger.info("Using DefaultAzureCredential for authentication")
+                
+                self.client = CosmosClient(
+                    url=self.endpoint, credential=credential
+                )
+                self.logger.info("Cosmos DB client initialized with AAD authentication")
+            except CredentialUnavailableError as e:
+                self.logger.error(f"Credential unavailable: {str(e)}")
+                raise DatabaseError(
+                    "Failed to authenticate with Azure: Credential unavailable."
+                )
+            except Exception as e:
+                self.logger.error(f"Unexpected error during authentication: {str(e)}")
+                raise DatabaseError(f"Authentication error: {str(e)}")
         # Get or create database and container
         self.database = self._get_or_create_database()
         self.container = self._get_or_create_container()
@@ -375,12 +382,11 @@ class CosmosDBService:
 
             where_clause = " AND ".join(where_conditions)
 
+            # Simple query to get all documents with their folder paths
             query = f"""
-            SELECT c.folder_path, COUNT(1) as count
+            SELECT c.folder_path
             FROM c 
-            WHERE {where_clause}
-            GROUP BY c.folder_path
-            ORDER BY count DESC
+            WHERE {where_clause} AND c.folder_path != null AND c.folder_path != ""
             """
 
             items = list(
@@ -389,7 +395,23 @@ class CosmosDBService:
                 )
             )
 
-            return {"folder_stats": items, "total_folders": len(items)}
+            # Count folders manually (since GROUP BY has issues)
+            folder_counts = {}
+            for item in items:
+                folder_path = item.get("folder_path", "")
+                if folder_path:
+                    folder_counts[folder_path] = folder_counts.get(folder_path, 0) + 1
+
+            # Convert to the expected format
+            folder_stats = [
+                {"folder_path": folder, "count": count}
+                for folder, count in folder_counts.items()
+            ]
+            
+            # Sort by count descending
+            folder_stats.sort(key=lambda x: x["count"], reverse=True)
+
+            return {"folder_stats": folder_stats, "total_folders": len(folder_stats)}
 
         except exceptions.CosmosHttpResponseError as e:
             logger.error(f"Failed to get folder stats: {e}")
